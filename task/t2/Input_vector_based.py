@@ -1,124 +1,178 @@
-import asyncio
+from enum import StrEnum
 from typing import Any
-from langchain_community.vectorstores import FAISS
 from langchain_core.messages import SystemMessage, HumanMessage
-from langchain_core.documents import Document
-from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
-from pydantic import SecretStr
+from langchain_core.output_parsers import PydanticOutputParser
+from langchain_core.prompts import SystemMessagePromptTemplate, ChatPromptTemplate
+from langchain_openai import AzureChatOpenAI
+from openai import BaseModel
+from pydantic import SecretStr, Field
 from task._constants import DIAL_URL, API_KEY
 from task.user_client import UserClient
 
-#TODO:
-# Before implementation open the `vector_based_grounding.png` to see the flow of app
+QUERY_ANALYSIS_PROMPT = """You are a query analysis system that extracts search parameters from user questions about users.
 
-#TODO:
-# Provide System prompt. Goal is to explain LLM that in the user message will be provide rag context that is retrieved
-# based on user question and user question and LLM need to answer to user based on provided context
-SYSTEM_PROMPT = """
+## Available Search Fields:
+- **name**: User's first name (e.g., "John", "Mary")
+- **surname**: User's last name (e.g., "Smith", "Johnson") 
+- **email**: User's email address (e.g., "john@example.com")
+
+## Instructions:
+1. Analyze the user's question and identify what they're looking for
+2. Extract specific search values mentioned in the query
+3. Map them to the appropriate search fields
+4. If multiple search criteria are mentioned, include all of them
+5. Only extract explicit values - don't infer or assume values not mentioned
+
+## Examples:
+- "Who is John?" → name: "John"
+- "Find users with surname Smith" → surname: "Smith" 
+- "Look for john@example.com" → email: "john@example.com"
+- "Find John Smith" → name: "John", surname: "Smith"
+- "I need user emails that filled with hiking" → No clear search parameters (return empty list)
+
+## Response Format:
+{format_instructions}
 """
 
-#TODO:
-# Should consist retrieved context and user question
-USER_PROMPT = """
+SYSTEM_PROMPT = """You are a RAG-powered assistant that assists users with their questions about user information.
+            
+## Structure of User message:
+`RAG CONTEXT` - Retrieved documents relevant to the query.
+`USER QUESTION` - The user's actual question.
+
+## Instructions:
+- Use information from `RAG CONTEXT` as context when answering the `USER QUESTION`.
+- Cite specific sources when using information from the context.
+- Answer ONLY based on conversation history and RAG context.
+- If no relevant information exists in `RAG CONTEXT` or conversation history, state that you cannot answer the question.
+- Be conversational and helpful in your responses.
+- When presenting user information, format it clearly and include relevant details.
 """
 
+USER_PROMPT = """## RAG CONTEXT:
+{context}
 
-def format_user_document(user: dict[str, Any]) -> str:
-    #TODO:
-    # Prepare context from users JSONs in the same way as in `no_grounding.py` `join_context` method (collect as one string)
-    raise NotImplementedError
-
-
-class UserRAG:
-    def __init__(self, embeddings: AzureOpenAIEmbeddings, llm_client: AzureChatOpenAI):
-        self.llm_client = llm_client
-        self.embeddings = embeddings
-        self.vectorstore = None
-
-    async def __aenter__(self):
-        print("🔎 Loading all users...")
-        #TODO:
-        # 1. Get all users (use UserClient)
-        # 2. Prepare array of Documents where page_content is `format_user_document(user)` (you need to iterate through users)
-        # 3. call `_create_vectorstore_with_batching` (don't forget that its async) and setup it as obj var `vectorstore`
-        print("✅ Vectorstore is ready.")
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        pass
-
-    async def _create_vectorstore_with_batching(self, documents: list[Document], batch_size: int = 100):
-        #TODO:
-        # 1. Split all `documents` on batches (100 documents in 1 batch). We need it since Embedding models have limited context window
-        # 2. Iterate through document batches and create array with tasks that will generate FAISS vector stores from documents:
-        #    https://api.python.langchain.com/en/latest/vectorstores/langchain_community.vectorstores.faiss.FAISS.html#langchain_community.vectorstores.faiss.FAISS.afrom_documents
-        # 3. Gather tasks with asyncio
-        # 4. Create `final_vectorstore` via merge of all vector stores:
-        #    https://api.python.langchain.com/en/latest/vectorstores/langchain_community.vectorstores.faiss.FAISS.html#langchain_community.vectorstores.faiss.FAISS.merge_from
-        # 6. Return `final_vectorstore`
-        raise NotImplementedError
-
-    async def retrieve_context(self, query: str, k: int = 10, score: float = 0.1) -> str:
-        #TODO:
-        # 1. Make similarity search:
-        #    https://api.python.langchain.com/en/latest/vectorstores/langchain_community.vectorstores.faiss.FAISS.html#langchain_community.vectorstores.faiss.FAISS.similarity_search_with_relevance_scores
-        # 2. Create `context_parts` empty array (we will collect content here)
-        # 3. Iterate through retrieved relevant docs (pay attention that its tuple (doc, relevance_score)) and:
-        #       - add doc page content to `context_parts` and then print score and content
-        # 4. Return joined context from `context_parts` with `\n\n` spliterator (to enhance readability)
-        raise NotImplementedError
-
-    def augment_prompt(self, query: str, context: str) -> str:
-        # TODO: Make augmentation for USER_PROMPT via `format` method
-        raise NotImplementedError
-
-    def generate_answer(self, augmented_prompt: str) -> str:
-        #TODO:
-        # 1. Create messages array with:
-        #       - system prompt
-        #       - user prompt
-        # 2. Generate response
-        #    https://python.langchain.com/api_reference/openai/chat_models/langchain_openai.chat_models.azure.AzureChatOpenAI.html#langchain_openai.chat_models.azure.AzureChatOpenAI.invoke
-        # 3. Return response content
-        raise NotImplementedError
+## USER QUESTION: 
+{query}"""
 
 
-async def main():
+class SearchField(StrEnum):
+    NAME = "name"
+    SURNAME = "surname"
+    EMAIL = "email"
 
-    #TODO:
-    # 1. Create AzureOpenAIEmbeddings
-    #    embedding model 'text-embedding-3-small-1'
-    #    I would recommend to set up dimensions as 384
-    # 2. Create AzureChatOpenAI
 
-    async with UserRAG(embeddings, llm_client) as rag:
-        print("Query samples:")
-        print(" - I need user emails that filled with hiking and psychology")
-        print(" - Who is John?")
-        while True:
-            user_question = input("> ").strip()
+class SearchRequest(BaseModel):
+    search_field: SearchField = Field(description="Search field")
+    search_value: str = Field(description="Search value. Sample: Adam.")
+
+
+class SearchRequests(BaseModel):
+    search_request_parameters: list[SearchRequest] = Field(
+        description="List of search parameters to execute",
+        default_factory=list
+    )
+
+
+llm_client = AzureChatOpenAI(
+    temperature=0.0,
+    azure_deployment='gpt-4o',
+    azure_endpoint=DIAL_URL,
+    api_key=SecretStr(API_KEY),
+    api_version=""
+)
+
+user_client = UserClient()
+
+
+def retrieve_context(user_question: str) -> list[dict[str, Any]]:
+    # 1. Create parser
+    parser = PydanticOutputParser(pydantic_object=SearchRequests)
+
+    # 2. Create messages array
+    messages = [
+        SystemMessagePromptTemplate.from_template(template=QUERY_ANALYSIS_PROMPT),
+        HumanMessage(content=user_question)
+    ]
+
+    # 3. Generate prompt with format instructions
+    prompt = ChatPromptTemplate.from_messages(messages=messages).partial(
+        format_instructions=parser.get_format_instructions()
+    )
+
+    # 4. Invoke the chain (LCEL)
+    search_requests: SearchRequests = (prompt | llm_client | parser).invoke({})
+
+    # 5. If search parameters found, query the API
+    if search_requests.search_request_parameters:
+        requests_dict = {}
+        for search_request in search_requests.search_request_parameters:
+            requests_dict[search_request.search_field.value] = search_request.search_value
+        print(requests_dict)
+        users = user_client.search_users(**requests_dict)
+        return users
+
+    # 6. No parameters found
+    print('No specific search parameters found!')
+    return []
+
+
+def augment_prompt(user_question: str, context: list[dict[str, Any]]) -> str:
+    # 1. Build context string from user dicts
+    context_str = ""
+    for user in context:
+        context_str += "User:\n"
+        for key, value in user.items():
+            context_str += f"  {key}: {value}\n"
+        context_str += "\n"
+
+    # 2. Format the augmented prompt
+    augmented = USER_PROMPT.format(context=context_str, query=user_question)
+
+    # 3. Print and return
+    print(augmented)
+    return augmented
+
+
+def generate_answer(augmented_prompt: str) -> str:
+    # 1. Create messages array
+    messages = [
+        SystemMessage(content=SYSTEM_PROMPT),
+        HumanMessage(content=augmented_prompt)
+    ]
+
+    # 2. Generate response (sync since main() is not async)
+    response = llm_client.invoke(messages)
+
+    # 3. Return content
+    return response.content
+
+
+def main():
+    print("Query samples:")
+    print(" - I need user emails that filled with hiking and psychology")
+    print(" - Who is John?")
+    print(" - Find users with surname Adams")
+    print(" - Do we have smbd with name John that love painting?")
+
+    while True:
+        user_question = input("> ").strip()
+        if user_question:
             if user_question.lower() in ['quit', 'exit']:
                 break
-            #TODO:
+
             # 1. Retrieve context
-            # 2. Make augmentation
-            # 3. Generate answer and print it
-            raise NotImplementedError
+            context = retrieve_context(user_question)
+
+            # 2. If context found, augment and generate
+            if context:
+                augmented_prompt = augment_prompt(user_question, context)
+                answer = generate_answer(augmented_prompt)
+                print(f"\n{answer}\n")
+            else:
+                # 3. No context found
+                print("No relevant information found")
 
 
-asyncio.run(main())
-
-# The problems with Vector based Grounding approach are:
-#   - In current solution we fetched all users once, prepared Vector store (Embed takes money) but we didn't play
-#     around the point that new users added and deleted every 5 minutes. (Actually, it can be fixed, we can create once
-#     Vector store and with new request we will fetch all the users, compare new and deleted with version in Vector
-#     store and delete the data about deleted users and add new users).
-#   - Limit with top_k (we can set up to 100, but what if the real number of similarity search 100+?)
-#   - With some requests works not so perfectly. (Here we can play and add extra chain with LLM that will refactor the
-#     user question in a way that will help for Vector search, but it is also not okay in the point that we have
-#     changed original user question).
-#   - Need to play with balance between top_k and score_threshold
-# Benefits are:
-#   - Similarity search by context
-#   - Any input can be used for search
-#   - Costs reduce
+if __name__ == "__main__":
+    main()
